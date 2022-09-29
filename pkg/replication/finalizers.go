@@ -30,10 +30,10 @@ import (
 
 	"github.com/arangodb/arangosync-client/client"
 	"github.com/arangodb/go-driver"
+	"github.com/arangodb/kube-arangodb/pkg/util"
 
 	api "github.com/arangodb/kube-arangodb/pkg/apis/replication/v1"
 	"github.com/arangodb/kube-arangodb/pkg/generated/clientset/versioned"
-	"github.com/arangodb/kube-arangodb/pkg/util"
 	"github.com/arangodb/kube-arangodb/pkg/util/constants"
 	"github.com/arangodb/kube-arangodb/pkg/util/errors"
 	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil"
@@ -174,6 +174,8 @@ func (dr *DeploymentReplication) inspectFinalizerDeplReplStopSync(ctx context.Co
 			return true, nil
 		}
 		// A Request must be sent once again because abort option has changed.
+	} else if syncStatus == client.SyncStatusFailed {
+		return false, errors.WithMessagef(err, "unexpected synchronization status \"%s\"", syncStatus)
 	}
 
 	// Check whether data consistency must be ensured.

@@ -24,7 +24,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
+
+	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/arangodb/arangosync-client/client"
 	"github.com/arangodb/arangosync-client/client/synccheck"
@@ -35,6 +39,26 @@ import (
 	"github.com/arangodb/kube-arangodb/pkg/util/errors"
 )
 
+// IsBeingDeleted returns true is object is marked for deletion.
+// It can be removed in two modes:
+// - set condition on the resource (recommended).
+// - remove resource (not recommended).
+func (dr *DeploymentReplication) IsBeingDeleted() (*meta.Time, bool) {
+	if timestamp := dr.apiObject.GetDeletionTimestamp(); timestamp != nil {
+		// In this mode of deletion we can not change resource anymore.
+		return timestamp, true
+	}
+
+	if cond, ok := dr.status.Conditions.Get(api.ConditionTypeConfigured); ok {
+		if cond.Reason == api.ConditionTypeConfiguredInvalid {
+			// In this mode of deletion we can change resource, so we will see actual progress in the status.
+			return &cond.LastTransitionTime, true
+		}
+	}
+
+	return nil, false
+}
+
 // inspectDeploymentReplication inspects the entire deployment replication
 // and configures the replication when needed.
 // This function should be called when:
@@ -42,187 +66,87 @@ import (
 // - any of the underlying resources has changed
 // - once in a while
 // Returns the delay until this function should be called again.
-func (dr *DeploymentReplication) inspectDeploymentReplication(lastInterval time.Duration) time.Duration {
+func (dr *DeploymentReplication) inspectDeploymentReplication(ctx context.Context, lastInterval time.Duration) (time.Duration, error) {
 	spec := dr.apiObject.Spec
-	nextInterval := lastInterval
-	hasError := false
-	ctx := context.Background()
 
 	// Add finalizers
 	if err := dr.addFinalizers(); err != nil {
-		dr.log.Err(err).Warn("Failed to add finalizers")
+		return 0, errors.WithMessage(err, "Failed to add finalizers")
 	}
 
 	// Is the deployment in failed state, if so, give up.
 	if dr.status.Phase.IsFailed() {
 		dr.log.Debug("Deployment replication is in Failed state.")
-		return nextInterval
+		return lastInterval, nil
 	}
 
-	// Is delete triggered?
-	if timestamp := dr.apiObject.GetDeletionTimestamp(); timestamp != nil {
+	if timestamp, ok := dr.IsBeingDeleted(); ok {
 		// Resource is being deleted.
 		retrySoon, err := dr.runFinalizers(ctx, dr.apiObject)
 		if err != nil || retrySoon {
-			if err != nil {
-				dr.log.Err(err).Warn("Failed to run finalizers")
-			}
 			timeout := CancellationTimeout + AbortTimeout
 			if isTimeExceeded(timestamp, timeout) {
 				// Cancellation and abort timeout exceeded, so it must go into failed state.
-				dr.failOnError(err, fmt.Sprintf("Failed to cancel synchronization in %s", timeout.String()))
+				dr.reportDeploymentReplicationErr(err, fmt.Sprintf("Failed to cancel synchronization in %s", timeout.String()))
 			}
 		}
 
-		return cancellationInterval
-	} else {
-		// Inspect configuration status
-		destClient, err := dr.createSyncMasterClient(spec.Destination)
 		if err != nil {
-			dr.log.Err(err).Warn("Failed to create destination syncmaster client")
-		} else {
-			destArangosyncVersion, err := destClient.Version(ctx)
-			if err != nil {
-				dr.log.Err(err).Warn("Failed to get destination arangosync version")
-				hasError = true
-			}
+			return cancellationInterval, errors.WithMessage(err, "Failed to run finalizers")
+		}
 
-			// Fetch status of destination
-			updateStatusNeeded := false
-			configureSyncNeeded := false
-			cancelSyncNeeded := false
-			destEndpoint, err := destClient.Master().GetEndpoints(ctx)
-			if err != nil {
-				dr.log.Err(err).Warn("Failed to fetch endpoints from destination syncmaster")
-			}
-			destStatus, err := destClient.Master().Status(ctx)
-			if err != nil {
-				dr.log.Err(err).Warn("Failed to fetch status from destination syncmaster")
-			} else {
-				// Inspect destination status
-				if destStatus.Status.IsActive() {
-					isIncomingEndpoint, err := dr.isIncomingEndpoint(destStatus, spec.Source)
-					if err != nil {
-						dr.log.Err(err).Warn("Failed to check is-incoming-endpoint")
-					} else {
-						if isIncomingEndpoint {
-							// Destination is correctly configured
+		return cancellationInterval, nil
+	}
 
-							dr.status.Conditions.Update(api.ConditionTypeConfigured, true, api.ConditionTypeConfiguredActive,
-								"Destination syncmaster is configured correctly and active")
-							dr.status.Destination = createEndpointStatus(destStatus, "")
-							dr.status.IncomingSynchronization = dr.inspectIncomingSynchronizationStatus(ctx, destClient,
-								driver.Version(destArangosyncVersion.Version), destStatus.Shards)
-							updateStatusNeeded = true
-						} else {
-							// Sync is active, but from different source
-							dr.log.Warn("Destination syncmaster is configured for different source")
-							cancelSyncNeeded = true
-							if dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInvalid,
-								"Destination syncmaster is configured for different source") {
-								updateStatusNeeded = true
-							}
-						}
-					}
-				} else {
-					// Destination has correct source, but is inactive
-					configureSyncNeeded = true
-					if dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInactive,
-						"Destination syncmaster is configured correctly but in-active") {
-						updateStatusNeeded = true
-					}
-				}
-			}
+	// Inspect configuration status
+	destClient, err := dr.createSyncMasterClient(spec.Destination)
+	if err != nil {
+		return 0, errors.WithMessage(err, "Failed to create destination sync master client")
+		//dr.status.Conditions.Update(api.ConditionTypeConfigured, true, api.ConditionTypeConfiguredActive,
+		//	"Destination syncmaster is configured correctly and active")
+		//dr.status.IncomingSynchronization = dr.inspectIncomingSynchronizationStatus(ctx, destClient,
+		//	driver.Version(destArangosyncVersion.Version), destStatus.Shards)
+		//if dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInvalid,
+		//	"Destination syncmaster is configured for different source") {
+	}
 
-			// Inspect source
-			sourceClient, err := dr.createSyncMasterClient(spec.Source)
-			if err != nil {
-				dr.log.Err(err).Warn("Failed to create source syncmaster client")
-			} else {
-				sourceStatus, err := sourceClient.Master().Status(ctx)
-				if err != nil {
-					dr.log.Err(err).Warn("Failed to fetch status from source syncmaster")
-				}
+	configureNeeded, updateStatusNeeded := false, false
+	// Inspect destination DC.
+	if ok, err := dr.checkDestinationDC(ctx, destClient); err != nil {
+		dr.log.Err(err).Warn("Failed to reconcile destination data center")
+		// Don't return here.
+	} else if ok {
+		if dr.isConfigurationNeeded() {
+			configureNeeded = true
+		}
+		//if dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInactive,
+		//	"Destination syncmaster is configured correctly but in-active") {
+		updateStatusNeeded = true
+	}
 
-				//if sourceStatus.Status.IsActive() {
-				outgoingID, hasOutgoingEndpoint, err := dr.hasOutgoingEndpoint(sourceStatus, spec.Destination, destEndpoint)
-				if err != nil {
-					dr.log.Err(err).Warn("Failed to check has-outgoing-endpoint")
-				} else if hasOutgoingEndpoint {
-					// Destination is know in source
-					// Fetch shard status
-					dr.status.Source = createEndpointStatus(sourceStatus, outgoingID)
-					updateStatusNeeded = true
-				} else {
-					// We cannot find the destination in the source status
-					dr.log.Err(err).Info("Destination not yet known in source syncmasters")
-				}
-			}
+	// Inspect source DC.
+	if ok, err := dr.setSourceEndpoints(ctx, destClient); err != nil {
+		dr.log.Err(err).Warn("Failed to set source endpoints")
+		// Don't return here.
+	} else if ok {
+		updateStatusNeeded = true
+	}
 
-			// Update status if needed
-			if updateStatusNeeded {
-				if err := dr.updateCRStatus(); err != nil {
-					dr.log.Err(err).Warn("Failed to update status")
-					hasError = true
-				}
-			}
-
-			// Cancel sync if needed
-			if cancelSyncNeeded {
-				req := client.CancelSynchronizationRequest{}
-				dr.log.Info("Canceling synchronization")
-				if _, err := destClient.Master().CancelSynchronization(ctx, req); err != nil {
-					dr.log.Err(err).Warn("Failed to cancel synchronization")
-					hasError = true
-				} else {
-					dr.log.Info("Canceled synchronization")
-					nextInterval = time.Second * 10
-				}
-			}
-
-			// Configure sync if needed
-			if configureSyncNeeded {
-				source, err := dr.createArangoSyncEndpoint(spec.Source)
-				if err != nil {
-					dr.log.Err(err).Warn("Failed to create syncmaster endpoint")
-					hasError = true
-				} else {
-					auth, err := dr.createArangoSyncTLSAuthentication(spec)
-					if err != nil {
-						dr.log.Err(err).Warn("Failed to configure synchronization authentication")
-						hasError = true
-					} else {
-						req := client.SynchronizationRequest{
-							Source:         source,
-							Authentication: auth,
-						}
-						dr.log.Info("Configuring synchronization")
-						if err := destClient.Master().Synchronize(ctx, req); err != nil {
-							dr.log.Err(err).Warn("Failed to configure synchronization")
-							hasError = true
-						} else {
-							dr.log.Info("Configured synchronization")
-							nextInterval = time.Second * 10
-						}
-					}
-				}
-			}
+	if updateStatusNeeded {
+		if err := dr.updateCRStatus(); err != nil {
+			return time.Second * 3, errors.WithMessage(err, "Failed to update status")
 		}
 	}
 
-	// Update next interval (on errors)
-	if hasError {
-		if dr.recentInspectionErrors == 0 {
-			nextInterval = minInspectionInterval
-			dr.recentInspectionErrors++
+	if configureNeeded {
+		if err := dr.configureSynchronization(ctx, destClient); err != nil {
+			return 0, errors.WithMessagef(err, "")
 		}
-	} else {
-		dr.recentInspectionErrors = 0
+
+		return time.Second * 10, nil
 	}
-	if nextInterval > maxInspectionInterval {
-		nextInterval = maxInspectionInterval
-	}
-	return nextInterval
+
+	return nextInterval, nil
 }
 
 // isIncomingEndpoint returns true when given sync status's endpoint
@@ -306,14 +230,12 @@ func (dr *DeploymentReplication) createDatabaseSynchronizationStatus(dbSyncStatu
 
 	var errs []api.DatabaseSynchronizationError
 	var shardsTotal, shardsInSync int
-	var errorsReportedToLog = 0
 	for colName, colSyncStatus := range dbSyncStatus.Collections {
+		col := colName
+		if features.SensitiveInformationProtection().Enabled() {
+			col = colSyncStatus.ID
+		}
 		if colSyncStatus.Error != "" && len(errs) < maxReportedIncomingSyncErrors {
-			col := colName
-			if features.SensitiveInformationProtection().Enabled() {
-				col = colSyncStatus.ID
-			}
-
 			errs = append(errs, api.DatabaseSynchronizationError{
 				Collection: col,
 				Shard:      "",
@@ -325,12 +247,12 @@ func (dr *DeploymentReplication) createDatabaseSynchronizationStatus(dbSyncStatu
 		for shardIndex, shardSyncStatus := range colSyncStatus.Shards {
 			if shardSyncStatus.InSync {
 				shardsInSync++
-			} else if errorsReportedToLog < maxReportedIncomingSyncErrors {
-				dr.log.Str("db", dbSyncStatus.ID).
-					Str("col", colSyncStatus.ID).
-					Int("shard", shardIndex).
-					Debug("incoming synchronization shard status is not in-sync: %s", shardSyncStatus.Message)
-				errorsReportedToLog++
+			} else if len(errs) < maxReportedIncomingSyncErrors {
+				errs = append(errs, api.DatabaseSynchronizationError{
+					Collection: col,
+					Shard:      strconv.Itoa(shardIndex),
+					Message:    shardSyncStatus.Message,
+				})
 			}
 		}
 	}
@@ -344,18 +266,19 @@ func (dr *DeploymentReplication) createDatabaseSynchronizationStatus(dbSyncStatu
 
 // createEndpointStatus creates an api EndpointStatus from the given sync status.
 func createEndpointStatus(status client.SyncInfo, outgoingID string) api.EndpointStatus {
-	result := api.EndpointStatus{}
 	if outgoingID == "" {
+		// Incoming DC.
 		return createEndpointStatusFromShards(status.Shards)
 	}
+
 	for _, o := range status.Outgoing {
-		if o.ID != outgoingID {
-			continue
+		if o.ID == outgoingID {
+			// Outgoing DC.
+			return createEndpointStatusFromShards(o.Shards)
 		}
-		return createEndpointStatusFromShards(o.Shards)
 	}
 
-	return result
+	return api.EndpointStatus{}
 }
 
 // createEndpointStatusFromShards creates an api EndpointStatus from the given list of shard statuses.
@@ -408,4 +331,128 @@ func createEndpointStatusFromShards(shards []client.ShardSyncInfo) api.EndpointS
 		result.Databases[i] = db
 	}
 	return result
+}
+
+//
+func (dr *DeploymentReplication) checkDestinationDC(ctx context.Context, destClient client.API) (bool, error) {
+	destStatus, err := destClient.Master().Status(ctx)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to fetch status from destination sync master")
+	}
+
+	// TODO test what if it is cancelling?
+	if !destStatus.Status.IsActive() {
+		// Destination has correct source, but is inactive.
+		changed := dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInactive,
+			"Destination sync master is configured correctly but in-active")
+
+		return changed, nil
+	}
+
+	spec := dr.apiObject.Spec
+	ep, err := dr.createArangoSyncEndpoint(spec.Source)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to create source sync master endpoint")
+	}
+
+	// Check whether destination source endpoints and spec endpoints contain each other.
+	// If intersection is not empty it means that endpoints match.
+	isIncomingEndpoint := !destStatus.Source.Intersection(ep).IsEmpty()
+	if isIncomingEndpoint {
+		destArangosyncVersion, err := destClient.Version(ctx)
+		if err != nil {
+			return false, errors.WithMessage(err, "Failed to get destination arangosync version")
+		}
+
+		// Destination is correctly configured
+		dr.status.Conditions.Update(api.ConditionTypeConfigured, true, api.ConditionTypeConfiguredActive,
+			"Destination sync master is configured correctly and active")
+		dr.status.Destination = createEndpointStatus(destStatus, "")
+		dr.status.IncomingSynchronization = dr.inspectIncomingSynchronizationStatus(ctx, destClient,
+			driver.Version(destArangosyncVersion.Version), destStatus.Shards)
+	} else {
+		// Sync is active, but from different source.
+		dr.log.
+			Strs("spec-endpoints", ep...).
+			Strs("sync-endpoints", destStatus.Source...).
+			Warn("Destination sync master is configured for different source")
+
+		if !dr.status.Conditions.Update(api.ConditionTypeConfigured, false, api.ConditionTypeConfiguredInvalid,
+			"Destination sync master is configured for different source") {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// setSourceEndpoints sets source endpoints in the ArangoDeploymentReplication status.
+func (dr *DeploymentReplication) setSourceEndpoints(ctx context.Context, destClient client.API) (bool, error) {
+	spec := dr.apiObject.Spec
+
+	sourceClient, err := dr.createSyncMasterClient(spec.Source)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to create source sync master client")
+	}
+
+	sourceStatus, err := sourceClient.Master().Status(ctx)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to fetch status from source sync master")
+	}
+
+	destEndpoint, err := destClient.Master().GetEndpoints(ctx)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to fetch endpoints from destination sync master")
+	}
+
+	outgoingID, hasOutgoingEndpoint, err := dr.hasOutgoingEndpoint(sourceStatus, spec.Destination, destEndpoint)
+	if err != nil {
+		return false, errors.WithMessage(err, "Failed to check has-outgoing-endpoint")
+	} else if !hasOutgoingEndpoint {
+		return false, errors.New("Destination not yet known in source sync masters")
+	}
+
+	dr.status.Source = createEndpointStatus(sourceStatus, outgoingID)
+	// TODO check if source is the some and if it is then return false, nil
+	return true, nil
+}
+
+// isConfigurationNeeded returns true when configuration.
+func (dr *DeploymentReplication) isConfigurationNeeded() bool {
+	cond, ok := dr.status.Conditions.Get(api.ConditionTypeConfigured)
+	if !ok {
+		return false
+	}
+
+	if cond.Reason == api.ConditionTypeConfiguredInactive && cond.Status == core.ConditionFalse {
+		return true
+	}
+
+	return false
+}
+
+// configureSynchronization turns on synchronization between two deployments.
+func (dr *DeploymentReplication) configureSynchronization(ctx context.Context, destClient client.API) error {
+	spec := dr.apiObject.Spec
+	source, err := dr.createArangoSyncEndpoint(spec.Source)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to create source sync master endpoint")
+	}
+
+	auth, err := dr.createArangoSyncTLSAuthentication(spec)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to configure synchronization authentication")
+	}
+
+	req := client.SynchronizationRequest{
+		Source:         source,
+		Authentication: auth,
+	}
+	dr.log.Info("Configuring synchronization")
+	if err := destClient.Master().Synchronize(ctx, req); err != nil {
+		return errors.WithMessage(err, "Failed to configure synchronization")
+	}
+
+	dr.log.Info("Configured synchronization")
+	return nil
 }

@@ -160,10 +160,12 @@ func (dr *DeploymentReplication) run() {
 	}
 
 	inspectionInterval := maxInspectionInterval
+	ctx, cancel := context.WithCancel(context.Background())
 	dr.inspectTrigger.Trigger()
 	for {
 		select {
 		case <-dr.stopCh:
+			cancel()
 			// We're being stopped.
 			return
 
@@ -172,7 +174,10 @@ func (dr *DeploymentReplication) run() {
 			switch event.Type {
 			case eventArangoDeploymentReplicationUpdated:
 				if err := dr.handleArangoDeploymentReplicationUpdatedEvent(event); err != nil {
-					dr.failOnError(err, "Failed to handle deployment replication update")
+					// It should not go into failed phase, maybe CR was not written to Kubernetes.
+					name := event.DeploymentReplication.GetName()
+					dr.log.Str("deployment-replication", name).Err(err).Warn("failed to update ArangoDeploymentReplication")
+					// TODO what happnes when we return here?
 					return
 				}
 			default:
@@ -180,9 +185,32 @@ func (dr *DeploymentReplication) run() {
 			}
 
 		case <-dr.inspectTrigger.Done():
-			inspectionInterval = dr.inspectDeploymentReplication(inspectionInterval)
+			preferredInterval, err := dr.inspectDeploymentReplication(ctx, inspectionInterval)
+			if err != nil {
+				// It is warning because eventually it should be reconciled.
+				dr.log.Err(err).Warn("Inspection deployment replication failed")
+				if dr.recentInspectionErrors == 0 {
+					// It is a first time when error occurs, so try almost right away next reconciliation loop.
+					inspectionInterval = minInspectionInterval
+					dr.recentInspectionErrors++
+				} else {
+					inspectionInterval = time.Duration(float64(inspectionInterval) * 1.5)
+				}
+			} else {
+				// Everything is fine, so it can be inspected after maximum interval.
+				inspectionInterval = maxInspectionInterval
+				dr.recentInspectionErrors = 0
+			}
 
+			if preferredInterval > 0 {
+				// It does not matter if there was an error or not, but here is preferred next interval.
+				inspectionInterval = preferredInterval
+			}
+			if inspectionInterval > maxInspectionInterval {
+				inspectionInterval = maxInspectionInterval
+			}
 		case <-timer.After(inspectionInterval):
+			// TODO memory leak
 			// Trigger inspection
 			dr.inspectTrigger.Trigger()
 			// Backoff with next interval
@@ -196,7 +224,7 @@ func (dr *DeploymentReplication) run() {
 
 // handleArangoDeploymentReplicationUpdatedEvent is called when the deployment replication is updated by the user.
 func (dr *DeploymentReplication) handleArangoDeploymentReplicationUpdatedEvent(event *deploymentReplicationEvent) error {
-	log := dr.log.Str("deployoment-replication", event.DeploymentReplication.GetName())
+	log := dr.log.Str("deployment-replication", event.DeploymentReplication.GetName())
 	repls := dr.deps.Client.Arango().ReplicationV1().ArangoDeploymentReplications(dr.apiObject.GetNamespace())
 
 	// Get the most recent version of the deployment replication from the API server
@@ -234,7 +262,7 @@ func (dr *DeploymentReplication) handleArangoDeploymentReplicationUpdatedEvent(e
 
 	// Save updated spec
 	if err := dr.updateCRSpec(newAPIObject.Spec); err != nil {
-		return errors.WithStack(errors.Newf("failed to update ArangoDeploymentReplication spec: %v", err))
+		return errors.WithMessage(err, "failed to update ArangoDeploymentReplication spec")
 	}
 
 	// Trigger inspect
@@ -330,8 +358,8 @@ func (dr *DeploymentReplication) updateCRSpec(newSpec api.DeploymentReplicationS
 	}
 }
 
-// failOnError reports the given error and sets the deployment replication status to failed.
-func (dr *DeploymentReplication) failOnError(err error, msg string) {
+// reportDeploymentReplicationErr reports the given error and sets the deployment replication status to failed.
+func (dr *DeploymentReplication) reportDeploymentReplicationErr(err error, msg string) {
 	if err != nil {
 		dr.log.Err(err).Error(msg)
 		dr.status.Reason = fmt.Sprintf("%s: %s", msg, err.Error())
@@ -345,7 +373,6 @@ func (dr *DeploymentReplication) failOnError(err error, msg string) {
 // reportFailedStatus sets the status of the deployment replication to Failed and keeps trying to forward
 // that to the API server.
 func (dr *DeploymentReplication) reportFailedStatus() {
-	dr.log.Info("local storage failed. Reporting failed reason...")
 	repls := dr.deps.Client.Arango().ReplicationV1().ArangoDeploymentReplications(dr.apiObject.GetNamespace())
 
 	op := func() error {
