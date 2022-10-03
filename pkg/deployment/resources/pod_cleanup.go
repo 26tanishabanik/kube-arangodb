@@ -33,7 +33,6 @@ import (
 	"github.com/arangodb/kube-arangodb/pkg/util/errors"
 	"github.com/arangodb/kube-arangodb/pkg/util/globals"
 	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil"
-	podv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/pod/v1"
 )
 
 const (
@@ -49,60 +48,103 @@ func (r *Resources) CleanupTerminatedPods(ctx context.Context) (util.Interval, e
 
 	// Update member status from all pods found
 	status := r.context.GetStatus()
+
 	if err := r.context.ACS().ForEachHealthyCluster(func(item sutil.ACSItem) error {
-		return item.Cache().Pod().V1().Iterate(func(pod *core.Pod) error {
-			if k8sutil.IsArangoDBImageIDAndVersionPod(pod) {
-				// Image ID pods are not relevant to inspect here
-				return nil
+		pods, err := r.mapPods(status.Members, item.Cache())
+		if err != nil {
+			return err
+		}
+
+		var podsToTerminate []*core.Pod
+
+		for group, members := range pods {
+			// Handle primary pods
+			for member, podsInfo := range members {
+				memberStatus, group, found := status.Members.ElementByID(member)
+				if pod := podsInfo.Primary; pod != nil {
+					if found {
+						spec := r.context.GetSpec()
+						coreContainers := spec.GetCoreContainers(group)
+						if !(k8sutil.IsPodSucceeded(pod, coreContainers) || k8sutil.IsPodFailed(pod, coreContainers) ||
+							k8sutil.IsPodTerminating(pod)) {
+							// The pod is not being terminated or failed or succeeded.
+							continue
+						}
+
+						// Check member termination condition
+						if !memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated) {
+							if !group.IsStateless() {
+								// For statefull members, we have to wait for confirmed termination
+								log.Str("pod", pod.GetName()).Debug("Cannot cleanup pod yet, waiting for it to reach terminated state")
+								nextInterval = nextInterval.ReduceTo(recheckStatefullPodCleanupInterval)
+								continue
+							} else {
+								// If a stateless server does not terminate within a reasonable amount or time, we kill it.
+								t := pod.GetDeletionTimestamp()
+								if t == nil || t.Add(statelessTerminationPeriod).After(time.Now()) {
+									// Either delete timestamp is not set, or not yet waiting long enough
+									nextInterval = nextInterval.ReduceTo(util.Interval(statelessTerminationPeriod))
+									continue
+								}
+							}
+						}
+					}
+
+					podsToTerminate = append(podsToTerminate, pod)
+				}
+				if pod := podsInfo.Secondary; pod != nil {
+					if found {
+						spec := r.context.GetSpec()
+						coreContainers := spec.GetCoreContainers(group)
+						if !(k8sutil.IsPodSucceeded(pod, coreContainers) || k8sutil.IsPodFailed(pod, coreContainers) ||
+							k8sutil.IsPodTerminating(pod)) {
+							// The pod is not being terminated or failed or succeeded.
+							continue
+						}
+					}
+
+					podsToTerminate = append(podsToTerminate, pod)
+				}
+				for _, pod := range podsInfo.Unknown {
+					if group == api.ServerGroupImageDiscovery {
+						// In case of ID pod, terminate leftovers after 15 min
+						if time.Since(pod.CreationTimestamp.Time) < 15*time.Minute {
+							continue
+						}
+					}
+					podsToTerminate = append(podsToTerminate, pod)
+				}
 			}
 
-			// Find member status
-			memberStatus, group, found := status.Members.MemberStatusByPodName(pod.GetName())
-			if !found {
-				log.Str("pod", pod.GetName()).Debug("no memberstatus found for pod. Performing cleanup")
-			} else {
-				spec := r.context.GetSpec()
-				coreContainers := spec.GetCoreContainers(group)
-				if !(k8sutil.IsPodSucceeded(pod, coreContainers) || k8sutil.IsPodFailed(pod, coreContainers) ||
-					k8sutil.IsPodTerminating(pod)) {
-					// The pod is not being terminated or failed or succeeded.
-					return nil
-				}
+			for _, pod := range podsToTerminate {
+				// Ok, we can delete the pod
+				log.Str("pod-name", pod.GetName()).Debug("Cleanup terminated pod")
 
-				// Check member termination condition
-				if !memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated) {
-					if !group.IsStateless() {
-						// For statefull members, we have to wait for confirmed termination
-						log.Str("pod", pod.GetName()).Debug("Cannot cleanup pod yet, waiting for it to reach terminated state")
-						nextInterval = nextInterval.ReduceTo(recheckStatefullPodCleanupInterval)
-						return nil
-					} else {
-						// If a stateless server does not terminate within a reasonable amount or time, we kill it.
-						t := pod.GetDeletionTimestamp()
-						if t == nil || t.Add(statelessTerminationPeriod).After(time.Now()) {
-							// Either delete timestamp is not set, or not yet waiting long enough
-							nextInterval = nextInterval.ReduceTo(util.Interval(statelessTerminationPeriod))
-							return nil
+				options := meta.NewDeleteOptions(0)
+				options.Preconditions = meta.NewUIDPreconditions(string(pod.GetUID()))
+				err := globals.GetGlobalTimeouts().Kubernetes().RunWithTimeout(ctx, func(ctxChild context.Context) error {
+					return item.Cache().Client().Kubernetes().CoreV1().Pods(item.Cache().Namespace()).Delete(ctxChild, pod.GetName(), *options)
+				})
+				if err != nil && !k8sutil.IsNotFound(err) {
+					log.Err(err).Str("pod", pod.GetName()).Debug("Failed to cleanup pod")
+					return errors.WithStack(err)
+				}
+			}
+
+			// Handle unknown pods
+			for _, podsInfo := range members {
+				for _, pod := range podsInfo.Unknown {
+					if group == api.ServerGroupImageDiscovery {
+						// In case of ID pod, terminate leftovers after 15 min
+						if time.Since(pod.CreationTimestamp.Time) < 15*time.Minute {
+							continue
 						}
 					}
 				}
 			}
+		}
 
-			// Ok, we can delete the pod
-			log.Str("pod-name", pod.GetName()).Debug("Cleanup terminated pod")
-
-			options := meta.NewDeleteOptions(0)
-			options.Preconditions = meta.NewUIDPreconditions(string(pod.GetUID()))
-			err := globals.GetGlobalTimeouts().Kubernetes().RunWithTimeout(ctx, func(ctxChild context.Context) error {
-				return item.Cache().Client().Kubernetes().CoreV1().Pods(item.Cache().Namespace()).Delete(ctxChild, pod.GetName(), *options)
-			})
-			if err != nil && !k8sutil.IsNotFound(err) {
-				log.Err(err).Str("pod", pod.GetName()).Debug("Failed to cleanup pod")
-				return errors.WithStack(err)
-			}
-
-			return nil
-		}, podv1.FilterPodsByLabels(k8sutil.LabelsForDeployment(r.context.GetAPIObject().GetName(), "")))
+		return nil
 	}); err != nil {
 		return 0, err
 	}

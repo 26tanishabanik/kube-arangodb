@@ -96,304 +96,303 @@ func (r *Resources) InspectPods(ctx context.Context, cachedStatus inspectorInter
 	var podNamesWithScheduleTimeout []string
 	var unscheduledPodNames []string
 
-	err := cachedStatus.Pod().V1().Iterate(func(pod *core.Pod) error {
-		if k8sutil.IsArangoDBImageIDAndVersionPod(pod) {
-			// Image ID pods are not relevant to inspect here
-			return nil
-		}
-
-		// Pod belongs to this deployment, update metric
-		inspectedPodsCounters.WithLabelValues(deploymentName).Inc()
-
-		memberStatus, group, found := status.Members.MemberStatusByPodName(pod.GetName())
-		if !found {
-			log.Str("pod", pod.GetName()).Strs("existing-pods", status.Members.PodNames()...).Warn("no memberstatus found for pod")
-			if k8sutil.IsPodMarkedForDeletion(pod) && len(pod.GetFinalizers()) > 0 {
-				// Strange, pod belongs to us, but we have no member for it.
-				// Remove all finalizers, so it can be removed.
-				log.Warn("Pod belongs to this deployment, but we don't know the member. Removing all finalizers")
-				_, err := k8sutil.RemovePodFinalizers(ctx, r.context.ACS().CurrentClusterCache(), cachedStatus.PodsModInterface().V1(), pod, pod.GetFinalizers(), false)
-				if err != nil {
-					log.Err(err).Debug("Failed to update pod (to remove all finalizers)")
-					return errors.WithStack(err)
-				}
-			}
-			return nil
-		}
-
-		spec := r.context.GetSpec()
-		coreContainers := spec.GetCoreContainers(group)
-
-		// Update state
-		updateMemberStatusNeeded := false
-		if k8sutil.IsPodSucceeded(pod, coreContainers) {
-			// Pod has terminated with exit code 0.
-			wasTerminated := memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated)
-			markAsTerminated := true
-
-			if pod.Spec.RestartPolicy == core.RestartPolicyAlways && !wasTerminated {
-				r.handleRestartedPod(pod, &memberStatus, &wasTerminated, &markAsTerminated)
-			}
-
-			if markAsTerminated && memberStatus.Conditions.Update(api.ConditionTypeTerminated, true, "Pod Succeeded", "") {
-				log.Str("pod-name", pod.GetName()).Debug("Updating member condition Terminated to true: Pod Succeeded")
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-
-				if !wasTerminated {
-					// Record termination time
-					now := meta.Now()
-					memberStatus.RecentTerminations = append(memberStatus.RecentTerminations, now)
-				}
-			}
-		} else if k8sutil.IsPodFailed(pod, coreContainers) {
-			// Pod has terminated with at least 1 container with a non-zero exit code.
-			wasTerminated := memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated)
-			markAsTerminated := true
-
-			if pod.Spec.RestartPolicy == core.RestartPolicyAlways && !wasTerminated {
-				r.handleRestartedPod(pod, &memberStatus, &wasTerminated, &markAsTerminated)
-			}
-
-			if markAsTerminated && memberStatus.Conditions.Update(api.ConditionTypeTerminated, true, "Pod Failed", "") {
-				if containers := k8sutil.GetFailedContainerNames(pod.Status.InitContainerStatuses); len(containers) > 0 {
-					for _, container := range containers {
-						switch container {
-						case api.ServerGroupReservedInitContainerNameVersionCheck:
-							if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.InitContainerStatuses, container); ok {
-								if t := c.State.Terminated; t != nil && t.ExitCode == 11 {
-									memberStatus.Upgrade = true
-									updateMemberStatusNeeded = true
-								}
-							}
-						case api.ServerGroupReservedInitContainerNameUpgrade:
-							memberStatus.Conditions.Update(api.ConditionTypeUpgradeFailed, true, "Upgrade Failed", "")
-						}
-
-						if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.InitContainerStatuses, container); ok {
-							if t := c.State.Terminated; t != nil && t.ExitCode != 0 {
-								log.Str("member", memberStatus.ID).
-									Str("pod", pod.GetName()).
-									Str("container", container).
-									Str("uid", string(pod.GetUID())).
-									Int32("exit-code", t.ExitCode).
-									Str("reason", t.Reason).
-									Str("message", t.Message).
-									Int32("signal", t.Signal).
-									Time("started", t.StartedAt.Time).
-									Time("finished", t.FinishedAt.Time).
-									Warn("Pod failed in unexpected way: Init Container failed")
-
-								r.metrics.IncMemberInitContainerRestarts(memberStatus.ID, container, t.ExitCode)
-							}
-						}
-					}
-				}
-
-				if containers := k8sutil.GetFailedContainerNames(pod.Status.ContainerStatuses); len(containers) > 0 {
-					for _, container := range containers {
-						if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.ContainerStatuses, container); ok {
-							if t := c.State.Terminated; t != nil && t.ExitCode != 0 {
-								log.Str("member", memberStatus.ID).
-									Str("pod", pod.GetName()).
-									Str("container", container).
-									Str("uid", string(pod.GetUID())).
-									Int32("exit-code", t.ExitCode).
-									Str("reason", t.Reason).
-									Str("message", t.Message).
-									Int32("signal", t.Signal).
-									Time("started", t.StartedAt.Time).
-									Time("finished", t.FinishedAt.Time).
-									Warn("Pod failed in unexpected way: Core Container failed")
-
-								r.metrics.IncMemberContainerRestarts(memberStatus.ID, container, t.ExitCode)
-							}
-						}
-					}
-				}
-
-				log.Str("pod-name", pod.GetName()).Debug("Updating member condition Terminated to true: Pod Failed")
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-
-				if !wasTerminated {
-					// Record termination time
-					now := meta.Now()
-					memberStatus.RecentTerminations = append(memberStatus.RecentTerminations, now)
-				}
-			}
-		}
-
-		if k8sutil.IsPodScheduled(pod) {
-			if _, ok := pod.Labels[k8sutil.LabelKeyArangoScheduled]; !ok {
-				// Adding scheduled label to the pod
-				l := addLabel(pod.Labels, k8sutil.LabelKeyArangoScheduled, "1")
-
-				if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
-					log.Err(err).Error("Unable to update scheduled labels")
-				}
-			}
-		}
-
-		// Topology labels
-		tv, tok := pod.Labels[k8sutil.LabelKeyArangoTopology]
-		zv, zok := pod.Labels[k8sutil.LabelKeyArangoZone]
-
-		if t, ts := status.Topology, memberStatus.Topology; t.Enabled() && t.IsTopologyOwned(ts) {
-			if tid, tz := string(t.ID), fmt.Sprintf("%d", ts.Zone); !tok || !zok || tv != tid || zv != tz {
-				l := addLabel(pod.Labels, k8sutil.LabelKeyArangoTopology, tid)
-				l = addLabel(l, k8sutil.LabelKeyArangoZone, tz)
-
-				if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
-					log.Err(err).Error("Unable to update topology labels")
-				}
-			}
-		} else {
-			if tok || zok {
-				l := removeLabel(pod.Labels, k8sutil.LabelKeyArangoTopology)
-				l = removeLabel(l, k8sutil.LabelKeyArangoZone)
-
-				if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
-					log.Err(err).Error("Unable to remove topology labels")
-				}
-			}
-		}
-		// End of Topology labels
-
-		// Reachable state
-		if state, ok := r.context.GetMembersState().MemberState(memberStatus.ID); ok {
-			if state.IsReachable() {
-				if memberStatus.Conditions.Update(api.ConditionTypeReachable, true, "ArangoDB is reachable", "") {
-					updateMemberStatusNeeded = true
-					nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-				}
-			} else {
-				if memberStatus.Conditions.Update(api.ConditionTypeReachable, false, "ArangoDB is not reachable", "") {
-					updateMemberStatusNeeded = true
-					nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-				}
-			}
-		}
-
-		// Member arch check
-		if v, ok := pod.Annotations[deployment.ArangoDeploymentPodChangeArchAnnotation]; ok {
-			if api.ArangoDeploymentArchitectureType(v).IsArchMismatch(spec.Architecture, memberStatus.Architecture) {
-				if memberStatus.Conditions.Update(api.ConditionTypeArchitectureMismatch, true, "Member has a different architecture than the deployment", "") {
-					updateMemberStatusNeeded = true
-				}
-			}
-		}
-
-		// Member Maintenance
-		if agencyCachePresent {
-			if agencyCache.Current.MaintenanceServers.InMaintenance(agency.Server(memberStatus.ID)) {
-				if memberStatus.Conditions.Update(api.ConditionTypeMemberMaintenanceMode, true, "ArangoDB Member maintenance enabled", "") {
-					updateMemberStatusNeeded = true
-					nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-				}
-			} else {
-				if memberStatus.Conditions.Remove(api.ConditionTypeMemberMaintenanceMode) {
-					updateMemberStatusNeeded = true
-					nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-				}
-			}
-		}
-
-		if k8sutil.IsContainerStarted(pod, shared.ServerContainerName) {
-			if memberStatus.Conditions.Update(api.ConditionTypeActive, true, "Core Pod Container started", "") {
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-			}
-		}
-
-		if memberStatus.Conditions.IsTrue(api.ConditionTypeActive) {
-			if v, ok := pod.Labels[k8sutil.LabelKeyArangoActive]; !ok || v != k8sutil.LabelValueArangoActive {
-				pod.Labels[k8sutil.LabelKeyArangoActive] = k8sutil.LabelValueArangoActive
-				if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), pod.Labels)); err != nil {
-					log.Str("pod-name", pod.GetName()).Err(err).Error("Unable to update labels")
-				}
-			}
-
-		}
-
-		if k8sutil.IsPodReady(pod) && k8sutil.AreContainersReady(pod, coreContainers) {
-			// Pod is now ready
-			if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, true, "Pod Ready", ""),
-				memberStatus.Conditions.Update(api.ConditionTypeStarted, true, "Pod Started", ""),
-				memberStatus.Conditions.Update(api.ConditionTypeServing, true, "Pod Serving", "")) {
-				log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready, Started & Serving to true")
-
-				if status.Topology.IsTopologyOwned(memberStatus.Topology) {
-					nodes, err := cachedStatus.Node().V1()
-					if err == nil {
-						node, ok := nodes.GetSimple(pod.Spec.NodeName)
-						if ok {
-							label, ok := node.Labels[status.Topology.Label]
-							if ok {
-								memberStatus.Topology.Label = label
-							}
-						}
-					}
-				}
-
-				memberStatus.IsInitialized = true // Require future pods for this member to have an existing UUID (in case of dbserver).
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-			}
-		} else if k8sutil.AreContainersReady(pod, coreContainers) {
-			// Pod is not ready, but core containers are fine
-			if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, false, "Pod Not Ready", ""),
-				memberStatus.Conditions.Update(api.ConditionTypeServing, true, "Pod is still serving", "")) {
-				log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready to false, while all core containers are ready")
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-			}
-		} else {
-			// Pod is not ready
-			if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, false, "Pod Not Ready", ""),
-				memberStatus.Conditions.Update(api.ConditionTypeServing, false, "Pod Core containers are not ready", strings.Join(coreContainers, ", "))) {
-				log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready & Serving to false")
-				updateMemberStatusNeeded = true
-				nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
-			}
-		}
-
-		if k8sutil.IsPodNotScheduledFor(pod, podScheduleTimeout) {
-			// Pod cannot be scheduled for to long
-			log.Str("pod-name", pod.GetName()).Debug("Pod scheduling timeout")
-			podNamesWithScheduleTimeout = append(podNamesWithScheduleTimeout, pod.GetName())
-		} else if !k8sutil.IsPodScheduled(pod) {
-			unscheduledPodNames = append(unscheduledPodNames, pod.GetName())
-		}
-
-		if k8sutil.IsPodMarkedForDeletion(pod) {
-			if memberStatus.Conditions.Update(api.ConditionTypeTerminating, true, "Pod marked for deletion", "") {
-				updateMemberStatusNeeded = true
-				log.Str("pod-name", pod.GetName()).Debug("Pod marked as terminating")
-			}
-			// Process finalizers
-			if x, err := r.runPodFinalizers(ctx, pod, memberStatus, func(m api.MemberStatus) error {
-				updateMemberStatusNeeded = true
-				memberStatus = m
-				return nil
-			}); err != nil {
-				// Only log here, since we'll be called to try again.
-				log.Err(err).Warn("Failed to run pod finalizers")
-			} else {
-				nextInterval = nextInterval.ReduceTo(x)
-			}
-		}
-
-		if updateMemberStatusNeeded {
-			if err := status.Members.Update(memberStatus, group); err != nil {
-				return errors.WithStack(err)
-			}
-		}
-
-		return nil
-	}, podv1.FilterPodsByLabels(k8sutil.LabelsForDeployment(deploymentName, "")))
+	pods, err := r.mapPods(status.Members, cachedStatus)
 	if err != nil {
 		return 0, err
+	}
+
+	for group, members := range pods {
+		for member, podsInfos := range members {
+			if group == api.ServerGroupImageDiscovery {
+				continue
+			}
+
+			if group == api.ServerGroupUnknown {
+				continue
+			}
+
+			// Primary
+			if pod := podsInfos.Primary; pod != nil {
+				// Pod belongs to this deployment, update metric
+				inspectedPodsCounters.WithLabelValues(deploymentName).Inc()
+
+				memberStatus, group, found := status.Members.ElementByID(member)
+				if !found {
+					// Member ID was not registered
+					continue
+				}
+
+				spec := r.context.GetSpec()
+				coreContainers := spec.GetCoreContainers(group)
+
+				// Update state
+				updateMemberStatusNeeded := false
+				if k8sutil.IsPodSucceeded(pod, coreContainers) {
+					// Pod has terminated with exit code 0.
+					wasTerminated := memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated)
+					markAsTerminated := true
+
+					if pod.Spec.RestartPolicy == core.RestartPolicyAlways && !wasTerminated {
+						r.handleRestartedPod(pod, &memberStatus, &wasTerminated, &markAsTerminated)
+					}
+
+					if markAsTerminated && memberStatus.Conditions.Update(api.ConditionTypeTerminated, true, "Pod Succeeded", "") {
+						log.Str("pod-name", pod.GetName()).Debug("Updating member condition Terminated to true: Pod Succeeded")
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+
+						if !wasTerminated {
+							// Record termination time
+							now := meta.Now()
+							memberStatus.RecentTerminations = append(memberStatus.RecentTerminations, now)
+						}
+					}
+				} else if k8sutil.IsPodFailed(pod, coreContainers) {
+					// Pod has terminated with at least 1 container with a non-zero exit code.
+					wasTerminated := memberStatus.Conditions.IsTrue(api.ConditionTypeTerminated)
+					markAsTerminated := true
+
+					if pod.Spec.RestartPolicy == core.RestartPolicyAlways && !wasTerminated {
+						r.handleRestartedPod(pod, &memberStatus, &wasTerminated, &markAsTerminated)
+					}
+
+					if markAsTerminated && memberStatus.Conditions.Update(api.ConditionTypeTerminated, true, "Pod Failed", "") {
+						if containers := k8sutil.GetFailedContainerNames(pod.Status.InitContainerStatuses); len(containers) > 0 {
+							for _, container := range containers {
+								switch container {
+								case api.ServerGroupReservedInitContainerNameVersionCheck:
+									if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.InitContainerStatuses, container); ok {
+										if t := c.State.Terminated; t != nil && t.ExitCode == 11 {
+											memberStatus.Upgrade = true
+											updateMemberStatusNeeded = true
+										}
+									}
+								case api.ServerGroupReservedInitContainerNameUpgrade:
+									memberStatus.Conditions.Update(api.ConditionTypeUpgradeFailed, true, "Upgrade Failed", "")
+								}
+
+								if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.InitContainerStatuses, container); ok {
+									if t := c.State.Terminated; t != nil && t.ExitCode != 0 {
+										log.Str("member", memberStatus.ID).
+											Str("pod", pod.GetName()).
+											Str("container", container).
+											Str("uid", string(pod.GetUID())).
+											Int32("exit-code", t.ExitCode).
+											Str("reason", t.Reason).
+											Str("message", t.Message).
+											Int32("signal", t.Signal).
+											Time("started", t.StartedAt.Time).
+											Time("finished", t.FinishedAt.Time).
+											Warn("Pod failed in unexpected way: Init Container failed")
+
+										r.metrics.IncMemberInitContainerRestarts(memberStatus.ID, container, t.ExitCode)
+									}
+								}
+							}
+						}
+
+						if containers := k8sutil.GetFailedContainerNames(pod.Status.ContainerStatuses); len(containers) > 0 {
+							for _, container := range containers {
+								if c, ok := k8sutil.GetAnyContainerStatusByName(pod.Status.ContainerStatuses, container); ok {
+									if t := c.State.Terminated; t != nil && t.ExitCode != 0 {
+										log.Str("member", memberStatus.ID).
+											Str("pod", pod.GetName()).
+											Str("container", container).
+											Str("uid", string(pod.GetUID())).
+											Int32("exit-code", t.ExitCode).
+											Str("reason", t.Reason).
+											Str("message", t.Message).
+											Int32("signal", t.Signal).
+											Time("started", t.StartedAt.Time).
+											Time("finished", t.FinishedAt.Time).
+											Warn("Pod failed in unexpected way: Core Container failed")
+
+										r.metrics.IncMemberContainerRestarts(memberStatus.ID, container, t.ExitCode)
+									}
+								}
+							}
+						}
+
+						log.Str("pod-name", pod.GetName()).Debug("Updating member condition Terminated to true: Pod Failed")
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+
+						if !wasTerminated {
+							// Record termination time
+							now := meta.Now()
+							memberStatus.RecentTerminations = append(memberStatus.RecentTerminations, now)
+						}
+					}
+				}
+
+				if k8sutil.IsPodScheduled(pod) {
+					if _, ok := pod.Labels[k8sutil.LabelKeyArangoScheduled]; !ok {
+						// Adding scheduled label to the pod
+						l := addLabel(pod.Labels, k8sutil.LabelKeyArangoScheduled, "1")
+
+						if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
+							log.Err(err).Error("Unable to update scheduled labels")
+						}
+					}
+				}
+
+				// Topology labels
+				tv, tok := pod.Labels[k8sutil.LabelKeyArangoTopology]
+				zv, zok := pod.Labels[k8sutil.LabelKeyArangoZone]
+
+				if t, ts := status.Topology, memberStatus.Topology; t.Enabled() && t.IsTopologyOwned(ts) {
+					if tid, tz := string(t.ID), fmt.Sprintf("%d", ts.Zone); !tok || !zok || tv != tid || zv != tz {
+						l := addLabel(pod.Labels, k8sutil.LabelKeyArangoTopology, tid)
+						l = addLabel(l, k8sutil.LabelKeyArangoZone, tz)
+
+						if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
+							log.Err(err).Error("Unable to update topology labels")
+						}
+					}
+				} else {
+					if tok || zok {
+						l := removeLabel(pod.Labels, k8sutil.LabelKeyArangoTopology)
+						l = removeLabel(l, k8sutil.LabelKeyArangoZone)
+
+						if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), l)); err != nil {
+							log.Err(err).Error("Unable to remove topology labels")
+						}
+					}
+				}
+				// End of Topology labels
+
+				// Reachable state
+				if state, ok := r.context.GetMembersState().MemberState(memberStatus.ID); ok {
+					if state.IsReachable() {
+						if memberStatus.Conditions.Update(api.ConditionTypeReachable, true, "ArangoDB is reachable", "") {
+							updateMemberStatusNeeded = true
+							nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+						}
+					} else {
+						if memberStatus.Conditions.Update(api.ConditionTypeReachable, false, "ArangoDB is not reachable", "") {
+							updateMemberStatusNeeded = true
+							nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+						}
+					}
+				}
+
+				// Member arch check
+				if v, ok := pod.Annotations[deployment.ArangoDeploymentPodChangeArchAnnotation]; ok {
+					if api.ArangoDeploymentArchitectureType(v).IsArchMismatch(spec.Architecture, memberStatus.Architecture) {
+						if memberStatus.Conditions.Update(api.ConditionTypeArchitectureMismatch, true, "Member has a different architecture than the deployment", "") {
+							updateMemberStatusNeeded = true
+						}
+					}
+				}
+
+				// Member Maintenance
+				if agencyCachePresent {
+					if agencyCache.Current.MaintenanceServers.InMaintenance(agency.Server(memberStatus.ID)) {
+						if memberStatus.Conditions.Update(api.ConditionTypeMemberMaintenanceMode, true, "ArangoDB Member maintenance enabled", "") {
+							updateMemberStatusNeeded = true
+							nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+						}
+					} else {
+						if memberStatus.Conditions.Remove(api.ConditionTypeMemberMaintenanceMode) {
+							updateMemberStatusNeeded = true
+							nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+						}
+					}
+				}
+
+				if k8sutil.IsContainerStarted(pod, shared.ServerContainerName) {
+					if memberStatus.Conditions.Update(api.ConditionTypeActive, true, "Core Pod Container started", "") {
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+					}
+				}
+
+				if memberStatus.Conditions.IsTrue(api.ConditionTypeActive) {
+					if v, ok := pod.Labels[k8sutil.LabelKeyArangoActive]; !ok || v != k8sutil.LabelValueArangoActive {
+						pod.Labels[k8sutil.LabelKeyArangoActive] = k8sutil.LabelValueArangoActive
+						if err := r.context.ApplyPatchOnPod(ctx, pod, patch.ItemReplace(patch.NewPath("metadata", "labels"), pod.Labels)); err != nil {
+							log.Str("pod-name", pod.GetName()).Err(err).Error("Unable to update labels")
+						}
+					}
+
+				}
+
+				if k8sutil.IsPodReady(pod) && k8sutil.AreContainersReady(pod, coreContainers) {
+					// Pod is now ready
+					if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, true, "Pod Ready", ""),
+						memberStatus.Conditions.Update(api.ConditionTypeStarted, true, "Pod Started", ""),
+						memberStatus.Conditions.Update(api.ConditionTypeServing, true, "Pod Serving", "")) {
+						log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready, Started & Serving to true")
+
+						if status.Topology.IsTopologyOwned(memberStatus.Topology) {
+							nodes, err := cachedStatus.Node().V1()
+							if err == nil {
+								node, ok := nodes.GetSimple(pod.Spec.NodeName)
+								if ok {
+									label, ok := node.Labels[status.Topology.Label]
+									if ok {
+										memberStatus.Topology.Label = label
+									}
+								}
+							}
+						}
+
+						memberStatus.IsInitialized = true // Require future pods for this member to have an existing UUID (in case of dbserver).
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+					}
+				} else if k8sutil.AreContainersReady(pod, coreContainers) {
+					// Pod is not ready, but core containers are fine
+					if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, false, "Pod Not Ready", ""),
+						memberStatus.Conditions.Update(api.ConditionTypeServing, true, "Pod is still serving", "")) {
+						log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready to false, while all core containers are ready")
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+					}
+				} else {
+					// Pod is not ready
+					if anyOf(memberStatus.Conditions.Update(api.ConditionTypeReady, false, "Pod Not Ready", ""),
+						memberStatus.Conditions.Update(api.ConditionTypeServing, false, "Pod Core containers are not ready", strings.Join(coreContainers, ", "))) {
+						log.Str("pod-name", pod.GetName()).Debug("Updating member condition Ready & Serving to false")
+						updateMemberStatusNeeded = true
+						nextInterval = nextInterval.ReduceTo(recheckSoonPodInspectorInterval)
+					}
+				}
+
+				if k8sutil.IsPodNotScheduledFor(pod, podScheduleTimeout) {
+					// Pod cannot be scheduled for to long
+					log.Str("pod-name", pod.GetName()).Debug("Pod scheduling timeout")
+					podNamesWithScheduleTimeout = append(podNamesWithScheduleTimeout, pod.GetName())
+				} else if !k8sutil.IsPodScheduled(pod) {
+					unscheduledPodNames = append(unscheduledPodNames, pod.GetName())
+				}
+
+				if k8sutil.IsPodMarkedForDeletion(pod) {
+					if memberStatus.Conditions.Update(api.ConditionTypeTerminating, true, "Pod marked for deletion", "") {
+						updateMemberStatusNeeded = true
+						log.Str("pod-name", pod.GetName()).Debug("Pod marked as terminating")
+					}
+					// Process finalizers
+					if x, err := r.runPodFinalizers(ctx, pod, memberStatus, func(m api.MemberStatus) error {
+						updateMemberStatusNeeded = true
+						memberStatus = m
+						return nil
+					}); err != nil {
+						// Only log here, since we'll be called to try again.
+						log.Err(err).Warn("Failed to run pod finalizers")
+					} else {
+						nextInterval = nextInterval.ReduceTo(x)
+					}
+				}
+
+				if updateMemberStatusNeeded {
+					if err := status.Members.Update(memberStatus, group); err != nil {
+						return 0, errors.WithStack(err)
+					}
+				}
+			}
+		}
+
 	}
 
 	// Go over all members, check for missing pods
@@ -513,4 +512,66 @@ func anyOf(bools ...bool) bool {
 	}
 
 	return false
+}
+
+type podsMapping map[api.ServerGroup]map[string]podsMap
+
+type podsMap struct {
+	Primary, Secondary *core.Pod
+
+	Unknown []*core.Pod
+}
+
+func (r *Resources) mapPods(status api.DeploymentStatusMembers, cachedStatus inspectorInterface.Inspector) (podsMapping, error) {
+	q := podsMapping{}
+
+	err := cachedStatus.Pod().V1().Iterate(func(pod *core.Pod) error {
+		m, g := r.determinePodDetails(status, pod)
+
+		gs := q[g]
+		if len(gs) == 0 {
+			gs = map[string]podsMap{}
+		}
+
+		ms := gs[m.ID]
+
+		if p := m.Pod; p != nil && p.GetName() == pod.GetName() {
+			ms.Primary = pod
+		} else if p := m.SecondaryPod; p != nil && p.GetName() == pod.GetName() {
+			ms.Secondary = pod
+		} else {
+			ms.Unknown = append(ms.Unknown, pod)
+		}
+
+		gs[m.ID] = ms
+		q[g] = gs
+		return nil
+	}, podv1.FilterPodsByLabels(k8sutil.LabelsForDeployment(r.context.GetName(), "")))
+
+	return q, err
+}
+
+func (r *Resources) determinePodDetails(status api.DeploymentStatusMembers, pod *core.Pod) (api.MemberStatus, api.ServerGroup) {
+	id, ok := pod.Labels[k8sutil.LabelKeyArangoMember]
+	if !ok {
+		return api.MemberStatus{}, api.ServerGroupUnknown
+	}
+
+	role, ok := pod.Labels[k8sutil.LabelKeyRole]
+	if !ok {
+		return api.MemberStatus{}, api.ServerGroupUnknown
+	}
+
+	roleF := api.ServerGroupFromRole(role)
+
+	m, g, ok := status.ElementByID(id)
+	if !ok {
+		return api.MemberStatus{}, api.ServerGroupUnknown
+	}
+
+	if g != roleF {
+		return api.MemberStatus{}, api.ServerGroupUnknown
+	}
+
+	return m, g
 }

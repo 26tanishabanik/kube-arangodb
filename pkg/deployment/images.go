@@ -131,9 +131,8 @@ func (ib *imagesBuilder) Run(ctx context.Context, cachedStatus inspectorInterfac
 // When no pod exists, it is created, otherwise the ID is fetched & version detected.
 // Returns: retrySoon, error
 func (ib *imagesBuilder) fetchArangoDBImageIDAndVersion(ctx context.Context, cachedStatus inspectorInterface.Inspector, image string) (bool, error) {
-	role := shared.ImageIDAndVersionRole
 	id := fmt.Sprintf("%0x", sha1.Sum([]byte(image)))[:6]
-	podName := k8sutil.CreatePodName(ib.APIObject.GetName(), role, id, "")
+	podName := k8sutil.CreatePodName(ib.APIObject.GetName(), api.ServerGroupImageDiscovery.AsRole(), id, "")
 	log := ib.Log.
 		Str("pod", podName).
 		Str("image", image)
@@ -242,7 +241,7 @@ func (ib *imagesBuilder) fetchArangoDBImageIDAndVersion(ctx context.Context, cac
 	}
 	imagePod.containerCreator.input = imagePod.AsInput()
 
-	pod, err = resources.RenderArangoPod(ctx, cachedStatus, ib.APIObject, role, id, podName, &imagePod)
+	pod, err = resources.RenderArangoPod(ctx, cachedStatus, ib.APIObject, api.ServerGroupImageDiscovery.AsRole(), id, podName, &imagePod)
 	if err != nil {
 		log.Err(err).Debug("Failed to render image ID pod")
 		return true, errors.WithStack(err)
