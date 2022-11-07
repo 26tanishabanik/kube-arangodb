@@ -29,6 +29,7 @@ import (
 	api "github.com/arangodb/kube-arangodb/pkg/apis/deployment/v1"
 	typedApi "github.com/arangodb/kube-arangodb/pkg/generated/clientset/versioned/typed/deployment/v1"
 	arangoclustersynchronizationv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/arangoclustersynchronization/v1"
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/definitions"
 )
 
 func (p arangoClusterSynchronizationMod) V1() arangoclustersynchronizationv1.ModInterface {
@@ -44,7 +45,11 @@ func (p arangoClusterSynchronizationModV1) client() typedApi.ArangoClusterSynchr
 }
 
 func (p arangoClusterSynchronizationModV1) Create(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.CreateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().Create(ctx, endpoint, opts); err != nil {
+	endpoint, err := p.client().Create(ctx, endpoint, opts)
+
+	registerCreateCall(definitions.ArangoClusterSynchronization, p.i.client.Name(), opts, err, p.i.namespace, endpoint)
+
+	if err != nil {
 		return endpoint, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
@@ -53,7 +58,11 @@ func (p arangoClusterSynchronizationModV1) Create(ctx context.Context, endpoint 
 }
 
 func (p arangoClusterSynchronizationModV1) Update(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().Update(ctx, endpoint, opts); err != nil {
+	endpoint, err := p.client().Update(ctx, endpoint, opts)
+
+	registerUpdateCall(definitions.ArangoClusterSynchronization, p.i.client.Name(), opts, err, p.i.namespace, endpoint)
+
+	if err != nil {
 		return endpoint, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
@@ -62,7 +71,11 @@ func (p arangoClusterSynchronizationModV1) Update(ctx context.Context, endpoint 
 }
 
 func (p arangoClusterSynchronizationModV1) UpdateStatus(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().UpdateStatus(ctx, endpoint, opts); err != nil {
+	endpoint, err := p.client().UpdateStatus(ctx, endpoint, opts)
+
+	registerUpdateCall(definitions.ArangoClusterSynchronization, p.i.client.Name(), opts, err, p.i.namespace, endpoint)
+
+	if err != nil {
 		return endpoint, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
@@ -71,7 +84,11 @@ func (p arangoClusterSynchronizationModV1) UpdateStatus(ctx context.Context, end
 }
 
 func (p arangoClusterSynchronizationModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *api.ArangoClusterSynchronization, err error) {
-	if endpoint, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
+	endpoint, err := p.client().Patch(ctx, name, pt, data, opts, subresources...)
+
+	registerPatchCall(definitions.ArangoClusterSynchronization, p.i.client.Name(), opts, err, p.i.namespace, endpoint)
+
+	if err != nil {
 		return endpoint, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
@@ -80,7 +97,11 @@ func (p arangoClusterSynchronizationModV1) Patch(ctx context.Context, name strin
 }
 
 func (p arangoClusterSynchronizationModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
-	if err := p.client().Delete(ctx, name, opts); err != nil {
+	err := p.client().Delete(ctx, name, opts)
+
+	registerDeleteCall(definitions.ArangoClusterSynchronization, p.i.client.Name(), opts, err, p.i.namespace, name)
+
+	if err != nil {
 		return err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()

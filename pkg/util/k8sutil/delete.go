@@ -18,15 +18,14 @@
 // Copyright holder is ArangoDB GmbH, Cologne, Germany
 //
 
-package definitions
+package k8sutil
 
-type Verb string
+import meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-const (
-	Create      Verb = "create"
-	Delete      Verb = "delete"
-	ForceDelete Verb = "forceDelete"
-	Get         Verb = "get"
-	Patch       Verb = "patch"
-	Update      Verb = "update"
-)
+func IsForceDeletion(opts meta.DeleteOptions) bool {
+	if o := opts.GracePeriodSeconds; o != nil {
+		return *o == 0
+	}
+
+	return false
+}

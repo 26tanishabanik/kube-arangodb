@@ -66,7 +66,8 @@ func init() {
 }
 
 var (
-	logger = logging.Global().Get("inspector")
+	logger       = logging.Global().RegisterAndGetLogger("inspector", logging.Info)
+	clientLogger = logging.Global().RegisterAndGetLogger("kubernetes-client", logging.Info)
 )
 
 func (i inspectorLoaders) Get(name string) int {

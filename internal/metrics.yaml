@@ -195,6 +195,77 @@ namespaces:
             description: "Deployment Namespace"
           - key: name
             description: "Deployment Name"
+    kubernetes:
+      client_create_requests:
+        shortDescription: "Counter for kubernetes Create requests"
+        description: "Counter for kubernetes Create requests"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_create_errors:
+        shortDescription: "Counter for kubernetes Create request errors"
+        description: "Counter for kubernetes Create requests errors"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_update_requests:
+        shortDescription: "Counter for kubernetes Update requests"
+        description: "Counter for kubernetes Update requests"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_update_errors:
+        shortDescription: "Counter for kubernetes Update request errors"
+        description: "Counter for kubernetes Update requests errors"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_patch_requests:
+        shortDescription: "Counter for kubernetes Patch requests"
+        description: "Counter for kubernetes Patch requests"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_patch_errors:
+        shortDescription: "Counter for kubernetes Patch request errors"
+        description: "Counter for kubernetes Patch requests errors"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_delete_requests:
+        shortDescription: "Counter for kubernetes Delete requests"
+        description: "Counter for kubernetes Delete requests"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_delete_errors:
+        shortDescription: "Counter for kubernetes Delete request errors"
+        description: "Counter for kubernetes Delete requests errors"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_force_delete_requests:
+        shortDescription: "Counter for kubernetes ForceDelete requests"
+        description: "Counter for kubernetes ForceDelete requests"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
+      client_force_delete_errors:
+        shortDescription: "Counter for kubernetes ForceDelete request errors"
+        description: "Counter for kubernetes ForceDelete requests errors"
+        type: "Counter"
+        labels:
+          - key: "component"
+            description: "Request Component"
     members:
       unexpected_container_exit_codes:
         shortDescription: "Counter of unexpected restarts in pod (Containers/InitContainers/EphemeralContainers)"
