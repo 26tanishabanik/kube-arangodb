@@ -18,7 +18,7 @@
 // Copyright holder is ArangoDB GmbH, Cologne, Germany
 //
 
-package tests
+package tlogging
 
 import (
 	"bytes"

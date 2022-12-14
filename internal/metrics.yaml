@@ -213,6 +213,16 @@ namespaces:
             description: "Container/InitContainer/EphemeralContainer"
           - key: code
             description: "ExitCode"
+    kubernetes:
+      client_requests:
+        shortDescription: "Counter of Kubernetes Client requests"
+        description: "Counter of Kubernetes Client requests"
+        type: "Counter"
+        labels:
+          - key: kind
+            description: "Resource Kind"
+          - key: operation
+            description: "Resource Operation"
     engine:
       panics_recovered:
         shortDescription: "Number of Panics recovered inside Operator reconciliation loop"

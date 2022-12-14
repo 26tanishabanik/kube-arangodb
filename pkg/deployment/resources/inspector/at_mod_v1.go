@@ -29,6 +29,7 @@ import (
 	api "github.com/arangodb/kube-arangodb/pkg/apis/deployment/v1"
 	typedApi "github.com/arangodb/kube-arangodb/pkg/generated/clientset/versioned/typed/deployment/v1"
 	arangotaskv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/arangotask/v1"
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 )
 
 func (p arangoTaskMod) V1() arangotaskv1.ModInterface {
@@ -43,43 +44,53 @@ func (p arangoTaskModV1) client() typedApi.ArangoTaskInterface {
 	return p.i.Client().Arango().DatabaseV1().ArangoTasks(p.i.Namespace())
 }
 
-func (p arangoTaskModV1) Create(ctx context.Context, endpoint *api.ArangoTask, opts meta.CreateOptions) (*api.ArangoTask, error) {
-	if endpoint, err := p.client().Create(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoTaskModV1) Create(ctx context.Context, arangoTask *api.ArangoTask, opts meta.CreateOptions) (*api.ArangoTask, error) {
+	logCreateOperation(constants.ArangoTaskKind, arangoTask)
+
+	if arangoTask, err := p.client().Create(ctx, arangoTask, opts); err != nil {
+		return arangoTask, err
 	} else {
 		p.i.GetThrottles().ArangoTask().Invalidate()
-		return endpoint, err
+		return arangoTask, err
 	}
 }
 
-func (p arangoTaskModV1) Update(ctx context.Context, endpoint *api.ArangoTask, opts meta.UpdateOptions) (*api.ArangoTask, error) {
-	if endpoint, err := p.client().Update(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoTaskModV1) Update(ctx context.Context, arangoTask *api.ArangoTask, opts meta.UpdateOptions) (*api.ArangoTask, error) {
+	logUpdateOperation(constants.ArangoTaskKind, arangoTask)
+
+	if arangoTask, err := p.client().Update(ctx, arangoTask, opts); err != nil {
+		return arangoTask, err
 	} else {
 		p.i.GetThrottles().ArangoTask().Invalidate()
-		return endpoint, err
+		return arangoTask, err
 	}
 }
 
-func (p arangoTaskModV1) UpdateStatus(ctx context.Context, endpoint *api.ArangoTask, opts meta.UpdateOptions) (*api.ArangoTask, error) {
-	if endpoint, err := p.client().UpdateStatus(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoTaskModV1) UpdateStatus(ctx context.Context, arangoTask *api.ArangoTask, opts meta.UpdateOptions) (*api.ArangoTask, error) {
+	logUpdateStatusOperation(constants.ArangoTaskKind, arangoTask)
+
+	if arangoTask, err := p.client().UpdateStatus(ctx, arangoTask, opts); err != nil {
+		return arangoTask, err
 	} else {
 		p.i.GetThrottles().ArangoTask().Invalidate()
-		return endpoint, err
+		return arangoTask, err
 	}
 }
 
 func (p arangoTaskModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *api.ArangoTask, err error) {
-	if endpoint, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
-		return endpoint, err
+	logPatchOperation(constants.ArangoTaskKind, p.i.Namespace(), name)
+
+	if arangoTask, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
+		return arangoTask, err
 	} else {
 		p.i.GetThrottles().ArangoTask().Invalidate()
-		return endpoint, err
+		return arangoTask, err
 	}
 }
 
 func (p arangoTaskModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.ArangoTaskKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

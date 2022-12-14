@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	persistentVolumeClaimv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/persistentvolumeclaim/v1"
 )
 
@@ -44,6 +45,8 @@ func (p persistentVolumeClaimsModV1) client() typedCore.PersistentVolumeClaimInt
 }
 
 func (p persistentVolumeClaimsModV1) Create(ctx context.Context, persistentVolumeClaim *core.PersistentVolumeClaim, opts meta.CreateOptions) (*core.PersistentVolumeClaim, error) {
+	logCreateOperation(constants.PersistentVolumeClaimKind, persistentVolumeClaim)
+
 	if persistentVolumeClaim, err := p.client().Create(ctx, persistentVolumeClaim, opts); err != nil {
 		return persistentVolumeClaim, err
 	} else {
@@ -53,6 +56,8 @@ func (p persistentVolumeClaimsModV1) Create(ctx context.Context, persistentVolum
 }
 
 func (p persistentVolumeClaimsModV1) Update(ctx context.Context, persistentVolumeClaim *core.PersistentVolumeClaim, opts meta.UpdateOptions) (*core.PersistentVolumeClaim, error) {
+	logUpdateOperation(constants.PersistentVolumeClaimKind, persistentVolumeClaim)
+
 	if persistentVolumeClaim, err := p.client().Update(ctx, persistentVolumeClaim, opts); err != nil {
 		return persistentVolumeClaim, err
 	} else {
@@ -62,6 +67,8 @@ func (p persistentVolumeClaimsModV1) Update(ctx context.Context, persistentVolum
 }
 
 func (p persistentVolumeClaimsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.PersistentVolumeClaim, err error) {
+	logPatchOperation(constants.PersistentVolumeClaimKind, p.i.Namespace(), name)
+
 	if persistentVolumeClaim, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return persistentVolumeClaim, err
 	} else {
@@ -71,6 +78,8 @@ func (p persistentVolumeClaimsModV1) Patch(ctx context.Context, name string, pt 
 }
 
 func (p persistentVolumeClaimsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.PersistentVolumeClaimKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

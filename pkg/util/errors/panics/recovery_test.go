@@ -27,11 +27,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/arangodb/kube-arangodb/pkg/logging"
-	"github.com/arangodb/kube-arangodb/pkg/util/tests"
+	"github.com/arangodb/kube-arangodb/pkg/util/tests/tlogging"
 )
 
 func Test_Panic(t *testing.T) {
-	tests.WithLogScanner(t, "Panic", func(t *testing.T, s tests.LogScanner) {
+	tlogging.WithLogScanner(t, "Panic", func(t *testing.T, s tlogging.LogScanner) {
 		g := s.Factory().RegisterAndGetLogger("panic", logging.Error)
 		err := RecoverWithSectionL(g, "foo", func() error {
 			panic(3)

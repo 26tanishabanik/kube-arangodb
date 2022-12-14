@@ -29,6 +29,7 @@ import (
 	api "github.com/arangodb/kube-arangodb/pkg/apis/deployment/v1"
 	typedApi "github.com/arangodb/kube-arangodb/pkg/generated/clientset/versioned/typed/deployment/v1"
 	arangoclustersynchronizationv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/arangoclustersynchronization/v1"
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 )
 
 func (p arangoClusterSynchronizationMod) V1() arangoclustersynchronizationv1.ModInterface {
@@ -43,43 +44,53 @@ func (p arangoClusterSynchronizationModV1) client() typedApi.ArangoClusterSynchr
 	return p.i.Client().Arango().DatabaseV1().ArangoClusterSynchronizations(p.i.Namespace())
 }
 
-func (p arangoClusterSynchronizationModV1) Create(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.CreateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().Create(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoClusterSynchronizationModV1) Create(ctx context.Context, arangoClusterSynchronization *api.ArangoClusterSynchronization, opts meta.CreateOptions) (*api.ArangoClusterSynchronization, error) {
+	logCreateOperation(constants.ArangoClusterSynchronizationKind, arangoClusterSynchronization)
+
+	if arangoClusterSynchronization, err := p.client().Create(ctx, arangoClusterSynchronization, opts); err != nil {
+		return arangoClusterSynchronization, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
-		return endpoint, err
+		return arangoClusterSynchronization, err
 	}
 }
 
-func (p arangoClusterSynchronizationModV1) Update(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().Update(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoClusterSynchronizationModV1) Update(ctx context.Context, arangoClusterSynchronization *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
+	logUpdateOperation(constants.ArangoClusterSynchronizationKind, arangoClusterSynchronization)
+
+	if arangoClusterSynchronization, err := p.client().Update(ctx, arangoClusterSynchronization, opts); err != nil {
+		return arangoClusterSynchronization, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
-		return endpoint, err
+		return arangoClusterSynchronization, err
 	}
 }
 
-func (p arangoClusterSynchronizationModV1) UpdateStatus(ctx context.Context, endpoint *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
-	if endpoint, err := p.client().UpdateStatus(ctx, endpoint, opts); err != nil {
-		return endpoint, err
+func (p arangoClusterSynchronizationModV1) UpdateStatus(ctx context.Context, arangoClusterSynchronization *api.ArangoClusterSynchronization, opts meta.UpdateOptions) (*api.ArangoClusterSynchronization, error) {
+	logUpdateStatusOperation(constants.ArangoClusterSynchronizationKind, arangoClusterSynchronization)
+
+	if arangoClusterSynchronization, err := p.client().UpdateStatus(ctx, arangoClusterSynchronization, opts); err != nil {
+		return arangoClusterSynchronization, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
-		return endpoint, err
+		return arangoClusterSynchronization, err
 	}
 }
 
 func (p arangoClusterSynchronizationModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *api.ArangoClusterSynchronization, err error) {
-	if endpoint, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
-		return endpoint, err
+	logPatchOperation(constants.ArangoClusterSynchronizationKind, p.i.Namespace(), name)
+
+	if arangoClusterSynchronization, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
+		return arangoClusterSynchronization, err
 	} else {
 		p.i.GetThrottles().ArangoClusterSynchronization().Invalidate()
-		return endpoint, err
+		return arangoClusterSynchronization, err
 	}
 }
 
 func (p arangoClusterSynchronizationModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.ArangoClusterSynchronizationKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

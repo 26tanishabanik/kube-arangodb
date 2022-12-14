@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	servicev1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/service/v1"
 )
 
@@ -44,6 +45,8 @@ func (p servicesModV1) client() typedCore.ServiceInterface {
 }
 
 func (p servicesModV1) Create(ctx context.Context, service *core.Service, opts meta.CreateOptions) (*core.Service, error) {
+	logCreateOperation(constants.ServiceKind, service)
+
 	if service, err := p.client().Create(ctx, service, opts); err != nil {
 		return service, err
 	} else {
@@ -53,6 +56,8 @@ func (p servicesModV1) Create(ctx context.Context, service *core.Service, opts m
 }
 
 func (p servicesModV1) Update(ctx context.Context, service *core.Service, opts meta.UpdateOptions) (*core.Service, error) {
+	logUpdateOperation(constants.ServiceKind, service)
+
 	if service, err := p.client().Update(ctx, service, opts); err != nil {
 		return service, err
 	} else {
@@ -62,6 +67,8 @@ func (p servicesModV1) Update(ctx context.Context, service *core.Service, opts m
 }
 
 func (p servicesModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.Service, err error) {
+	logPatchOperation(constants.ServiceKind, p.i.Namespace(), name)
+
 	if service, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return service, err
 	} else {
@@ -71,6 +78,8 @@ func (p servicesModV1) Patch(ctx context.Context, name string, pt types.PatchTyp
 }
 
 func (p servicesModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.ServiceKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

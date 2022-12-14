@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	endpointsv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/endpoints/v1"
 )
 
@@ -44,6 +45,8 @@ func (p endpointsModV1) client() typedCore.EndpointsInterface {
 }
 
 func (p endpointsModV1) Create(ctx context.Context, endpoint *core.Endpoints, opts meta.CreateOptions) (*core.Endpoints, error) {
+	logCreateOperation(constants.EndpointsKind, endpoint)
+
 	if endpoint, err := p.client().Create(ctx, endpoint, opts); err != nil {
 		return endpoint, err
 	} else {
@@ -53,6 +56,8 @@ func (p endpointsModV1) Create(ctx context.Context, endpoint *core.Endpoints, op
 }
 
 func (p endpointsModV1) Update(ctx context.Context, endpoint *core.Endpoints, opts meta.UpdateOptions) (*core.Endpoints, error) {
+	logUpdateOperation(constants.EndpointsKind, endpoint)
+
 	if endpoint, err := p.client().Update(ctx, endpoint, opts); err != nil {
 		return endpoint, err
 	} else {
@@ -62,6 +67,8 @@ func (p endpointsModV1) Update(ctx context.Context, endpoint *core.Endpoints, op
 }
 
 func (p endpointsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.Endpoints, err error) {
+	logPatchOperation(constants.EndpointsKind, p.i.Namespace(), name)
+
 	if endpoint, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return endpoint, err
 	} else {
@@ -71,6 +78,8 @@ func (p endpointsModV1) Patch(ctx context.Context, name string, pt types.PatchTy
 }
 
 func (p endpointsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.EndpointsKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

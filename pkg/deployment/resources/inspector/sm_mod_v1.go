@@ -28,6 +28,7 @@ import (
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	serviceMonitorv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/servicemonitor/v1"
 )
 
@@ -44,6 +45,8 @@ func (p serviceMonitorsModV1) client() monitoringv1.ServiceMonitorInterface {
 }
 
 func (p serviceMonitorsModV1) Create(ctx context.Context, serviceMonitor *monitoring.ServiceMonitor, opts meta.CreateOptions) (*monitoring.ServiceMonitor, error) {
+	logCreateOperation(constants.ServiceMonitorKind, serviceMonitor)
+
 	if serviceMonitor, err := p.client().Create(ctx, serviceMonitor, opts); err != nil {
 		return serviceMonitor, err
 	} else {
@@ -53,6 +56,8 @@ func (p serviceMonitorsModV1) Create(ctx context.Context, serviceMonitor *monito
 }
 
 func (p serviceMonitorsModV1) Update(ctx context.Context, serviceMonitor *monitoring.ServiceMonitor, opts meta.UpdateOptions) (*monitoring.ServiceMonitor, error) {
+	logUpdateOperation(constants.ServiceMonitorKind, serviceMonitor)
+
 	if serviceMonitor, err := p.client().Update(ctx, serviceMonitor, opts); err != nil {
 		return serviceMonitor, err
 	} else {
@@ -62,6 +67,8 @@ func (p serviceMonitorsModV1) Update(ctx context.Context, serviceMonitor *monito
 }
 
 func (p serviceMonitorsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *monitoring.ServiceMonitor, err error) {
+	logPatchOperation(constants.ServiceMonitorKind, p.i.Namespace(), name)
+
 	if serviceMonitor, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return serviceMonitor, err
 	} else {
@@ -71,6 +78,8 @@ func (p serviceMonitorsModV1) Patch(ctx context.Context, name string, pt types.P
 }
 
 func (p serviceMonitorsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.ServiceMonitorKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

@@ -279,6 +279,13 @@ func New(config Config, deps Dependencies, apiObject *api.ArangoDeployment) (*De
 	aInformer := arangoInformer.NewSharedInformerFactoryWithOptions(deps.Client.Arango(), 0, arangoInformer.WithNamespace(apiObject.GetNamespace()))
 	kInformer := informers.NewSharedInformerFactoryWithOptions(deps.Client.Kubernetes(), 0, informers.WithNamespace(apiObject.GetNamespace()))
 
+	ctx, c := globals.GetGlobalTimeouts().Kubernetes().WithTimeout(context.Background())
+	defer c()
+
+	if err := i.Refresh(ctx); err != nil {
+		d.log.Err(err).Error("Unable to refresh inspector")
+	}
+
 	i.RegisterInformers(kInformer, aInformer)
 
 	aInformer.Start(d.stopCh)

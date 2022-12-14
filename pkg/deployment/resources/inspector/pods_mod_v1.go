@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	podv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/pod/v1"
 )
 
@@ -44,6 +45,8 @@ func (p podsModV1) client() typedCore.PodInterface {
 }
 
 func (p podsModV1) Create(ctx context.Context, pod *core.Pod, opts meta.CreateOptions) (*core.Pod, error) {
+	logCreateOperation(constants.PodKind, pod)
+
 	if pod, err := p.client().Create(ctx, pod, opts); err != nil {
 		return pod, err
 	} else {
@@ -53,6 +56,8 @@ func (p podsModV1) Create(ctx context.Context, pod *core.Pod, opts meta.CreateOp
 }
 
 func (p podsModV1) Update(ctx context.Context, pod *core.Pod, opts meta.UpdateOptions) (*core.Pod, error) {
+	logUpdateOperation(constants.PodKind, pod)
+
 	if pod, err := p.client().Update(ctx, pod, opts); err != nil {
 		return pod, err
 	} else {
@@ -62,6 +67,8 @@ func (p podsModV1) Update(ctx context.Context, pod *core.Pod, opts meta.UpdateOp
 }
 
 func (p podsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.Pod, err error) {
+	logPatchOperation(constants.PodKind, p.i.Namespace(), name)
+
 	if pod, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return pod, err
 	} else {
@@ -71,6 +78,8 @@ func (p podsModV1) Patch(ctx context.Context, name string, pt types.PatchType, d
 }
 
 func (p podsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.PodKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

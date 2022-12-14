@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	serviceAccountv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/serviceaccount/v1"
 )
 
@@ -44,6 +45,8 @@ func (p serviceAccountsModV1) client() typedCore.ServiceAccountInterface {
 }
 
 func (p serviceAccountsModV1) Create(ctx context.Context, serviceAccount *core.ServiceAccount, opts meta.CreateOptions) (*core.ServiceAccount, error) {
+	logCreateOperation(constants.ServiceAccountKind, serviceAccount)
+
 	if serviceAccount, err := p.client().Create(ctx, serviceAccount, opts); err != nil {
 		return serviceAccount, err
 	} else {
@@ -53,6 +56,8 @@ func (p serviceAccountsModV1) Create(ctx context.Context, serviceAccount *core.S
 }
 
 func (p serviceAccountsModV1) Update(ctx context.Context, serviceAccount *core.ServiceAccount, opts meta.UpdateOptions) (*core.ServiceAccount, error) {
+	logUpdateOperation(constants.ServiceAccountKind, serviceAccount)
+
 	if serviceAccount, err := p.client().Update(ctx, serviceAccount, opts); err != nil {
 		return serviceAccount, err
 	} else {
@@ -62,6 +67,8 @@ func (p serviceAccountsModV1) Update(ctx context.Context, serviceAccount *core.S
 }
 
 func (p serviceAccountsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.ServiceAccount, err error) {
+	logPatchOperation(constants.ServiceAccountKind, p.i.Namespace(), name)
+
 	if serviceAccount, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return serviceAccount, err
 	} else {
@@ -71,6 +78,8 @@ func (p serviceAccountsModV1) Patch(ctx context.Context, name string, pt types.P
 }
 
 func (p serviceAccountsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.ServiceAccountKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

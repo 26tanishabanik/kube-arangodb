@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	typedCore "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	secretv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/secret/v1"
 )
 
@@ -44,6 +45,8 @@ func (p secretsModV1) client() typedCore.SecretInterface {
 }
 
 func (p secretsModV1) Create(ctx context.Context, secret *core.Secret, opts meta.CreateOptions) (*core.Secret, error) {
+	logCreateOperation(constants.SecretKind, secret)
+
 	if secret, err := p.client().Create(ctx, secret, opts); err != nil {
 		return secret, err
 	} else {
@@ -53,6 +56,8 @@ func (p secretsModV1) Create(ctx context.Context, secret *core.Secret, opts meta
 }
 
 func (p secretsModV1) Update(ctx context.Context, secret *core.Secret, opts meta.UpdateOptions) (*core.Secret, error) {
+	logUpdateOperation(constants.SecretKind, secret)
+
 	if secret, err := p.client().Update(ctx, secret, opts); err != nil {
 		return secret, err
 	} else {
@@ -62,6 +67,8 @@ func (p secretsModV1) Update(ctx context.Context, secret *core.Secret, opts meta
 }
 
 func (p secretsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts meta.PatchOptions, subresources ...string) (result *core.Secret, err error) {
+	logPatchOperation(constants.SecretKind, p.i.Namespace(), name)
+
 	if secret, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return secret, err
 	} else {
@@ -71,6 +78,8 @@ func (p secretsModV1) Patch(ctx context.Context, name string, pt types.PatchType
 }
 
 func (p secretsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.SecretKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

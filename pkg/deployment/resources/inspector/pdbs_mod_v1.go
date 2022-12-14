@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	policytypedv1 "k8s.io/client-go/kubernetes/typed/policy/v1"
 
+	"github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/constants"
 	poddisruptionbudgetv1 "github.com/arangodb/kube-arangodb/pkg/util/k8sutil/inspector/poddisruptionbudget/v1"
 )
 
@@ -45,6 +46,8 @@ func (p podDisruptionBudgetsModV1) client() policytypedv1.PodDisruptionBudgetInt
 
 func (p podDisruptionBudgetsModV1) Create(ctx context.Context, podDisruptionBudget *policyv1.PodDisruptionBudget,
 	opts meta.CreateOptions) (*policyv1.PodDisruptionBudget, error) {
+	logCreateOperation(constants.PodDisruptionBudgetKind, podDisruptionBudget)
+
 	if podDisruptionBudget, err := p.client().Create(ctx, podDisruptionBudget, opts); err != nil {
 		return podDisruptionBudget, err
 	} else {
@@ -55,6 +58,8 @@ func (p podDisruptionBudgetsModV1) Create(ctx context.Context, podDisruptionBudg
 
 func (p podDisruptionBudgetsModV1) Update(ctx context.Context, podDisruptionBudget *policyv1.PodDisruptionBudget,
 	opts meta.UpdateOptions) (*policyv1.PodDisruptionBudget, error) {
+	logUpdateOperation(constants.PodDisruptionBudgetKind, podDisruptionBudget)
+
 	if podDisruptionBudget, err := p.client().Update(ctx, podDisruptionBudget, opts); err != nil {
 		return podDisruptionBudget, err
 	} else {
@@ -65,6 +70,8 @@ func (p podDisruptionBudgetsModV1) Update(ctx context.Context, podDisruptionBudg
 
 func (p podDisruptionBudgetsModV1) Patch(ctx context.Context, name string, pt types.PatchType, data []byte,
 	opts meta.PatchOptions, subresources ...string) (result *policyv1.PodDisruptionBudget, err error) {
+	logPatchOperation(constants.PodDisruptionBudgetKind, p.i.Namespace(), name)
+
 	if podDisruptionBudget, err := p.client().Patch(ctx, name, pt, data, opts, subresources...); err != nil {
 		return podDisruptionBudget, err
 	} else {
@@ -74,6 +81,8 @@ func (p podDisruptionBudgetsModV1) Patch(ctx context.Context, name string, pt ty
 }
 
 func (p podDisruptionBudgetsModV1) Delete(ctx context.Context, name string, opts meta.DeleteOptions) error {
+	logDeleteOperation(constants.PodDisruptionBudgetKind, p.i.Namespace(), name, opts)
+
 	if err := p.client().Delete(ctx, name, opts); err != nil {
 		return err
 	} else {

@@ -61,12 +61,9 @@ const (
 	DefaultVersion = ""
 )
 
-func init() {
-	logging.Global().RegisterLogger("inspector", logging.Info)
-}
-
 var (
-	logger = logging.Global().Get("inspector")
+	logger       = logging.Global().RegisterAndGetLogger("inspector", logging.Info)
+	clientLogger = logging.Global().RegisterAndGetLogger("kubernetes-client", logging.Info)
 )
 
 func (i inspectorLoaders) Get(name string) int {
@@ -164,11 +161,11 @@ func (i *inspectorState) RegisterInformers(k8s informers.SharedInformerFactory, 
 	// Arango
 	arango.Database().V1().ArangoMembers().Informer().AddEventHandler(i.eventHandler(definitions.ArangoMember))
 
-	if _, err := i.ArangoTask().V1(); err != nil {
+	if _, err := i.ArangoTask().V1(); err == nil {
 		arango.Database().V1().ArangoTasks().Informer().AddEventHandler(i.eventHandler(definitions.ArangoTask))
 	}
 
-	if _, err := i.ArangoClusterSynchronization().V1(); err != nil {
+	if _, err := i.ArangoClusterSynchronization().V1(); err == nil {
 		arango.Database().V1().ArangoClusterSynchronizations().Informer().AddEventHandler(i.eventHandler(definitions.ArangoClusterSynchronization))
 	}
 }
@@ -410,6 +407,8 @@ func (i *inspectorState) refreshInThreads(ctx context.Context, threads int, load
 	i.deploymentResult = n.deploymentResult
 
 	i.throttles = n.throttles
+
+	i.versionInfo = n.versionInfo
 
 	i.last = time.Now()
 	i.initialised = true
