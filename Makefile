@@ -46,6 +46,8 @@ ifndef KEEP_GOPATH
 	GOPATH := $(GOBUILDDIR)
 endif
 
+GO ?= go
+
 TEST_BUILD ?= 0
 GOBUILDARGS ?=
 GOBASEVERSION := 1.19
@@ -570,10 +572,10 @@ tidy:
 	@go mod tidy -compat=$(GOBASEVERSION)
 
 .PHONY: deps-reload
-deps-reload: tidy init
+deps-reload: tools tidy init synchronize generate
 
 .PHONY: init
-init: vendor tools update-generated $(BIN)
+init: vendor update-generated $(BIN)
 
 .PHONY: tools-min
 tools-min: update-vendor
