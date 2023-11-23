@@ -18,33 +18,34 @@
 // Copyright holder is ArangoDB GmbH, Cologne, Germany
 //
 
-package v1alpha1
+syntax = "proto3";
 
-import (
-	"github.com/arangodb/kube-arangodb/pkg/apis/shared"
-)
+package arangodb.operator.common.v1;
 
-type ArangoMLStorageSpec struct {
-	Mode    *ArangoMLStorageSpecMode    `json:"mode,omitempty"`
-	Backend *ArangoMLStorageSpecBackend `json:"backend,omitempty"`
+option go_package = "github.com/arangodb/kube-arangodb/pkg/api/common/v1";
+
+// Empty message
+message Empty {}
+
+// Response for single boolean.
+message YesOrNo {
+  bool result = 1;
 }
 
-func (s *ArangoMLStorageSpec) Validate() error {
-	if s == nil {
-		s = &ArangoMLStorageSpec{}
-	}
+// Semantic version number.
+message Version {
+  // Major version (increasing may break APIs)
+  int32 major = 1;
+  // Minor version (increased for new features)
+  int32 minor = 2;
+  // Patch version (increased for fixes)
+  int32 patch = 3;
+}
 
-	if err := shared.WithErrors(
-		shared.PrefixResourceError("backend", s.Backend.Validate()),
-	); err != nil {
-		return err
-	}
-
-	if err := shared.WithErrors(shared.PrefixResourceErrors("spec",
-		shared.PrefixResourceError("mode", s.Mode.Validate()),
-	)); err != nil {
-		return err
-	}
-
-	return nil
+// KeyValuePair specifies a key-value pair.
+message KeyValuePair {
+  // The key.
+  string key = 1;
+  // The value.
+  string value = 2;
 }

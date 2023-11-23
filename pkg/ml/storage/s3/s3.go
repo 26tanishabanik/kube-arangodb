@@ -1,6 +1,4 @@
 //
-// DISCLAIMER
-//
 // Copyright 2023 ArangoDB GmbH, Cologne, Germany
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,33 +16,28 @@
 // Copyright holder is ArangoDB GmbH, Cologne, Germany
 //
 
-package v1alpha1
+package s3
 
 import (
-	"github.com/arangodb/kube-arangodb/pkg/apis/shared"
+	"context"
+
+	pb "github.com/arangodb/kube-arangodb/pkg/api/ml/storage/v1"
 )
 
-type ArangoMLStorageSpec struct {
-	Mode    *ArangoMLStorageSpecMode    `json:"mode,omitempty"`
-	Backend *ArangoMLStorageSpecBackend `json:"backend,omitempty"`
+type Config struct {
+	Endpoint      string
+	AllowInsecure bool
+	CACrtFile     string
+	CAKeyFile     string
+	DisableSSL    bool
+	Region        string
+	BucketName    string
+	AccessKeyFile string // path to file containing S3 AccessKey
+	SecretKeyFile string // path to file containing S3 SecretKey
 }
 
-func (s *ArangoMLStorageSpec) Validate() error {
-	if s == nil {
-		s = &ArangoMLStorageSpec{}
-	}
+type ShutdownableBucketServiceServer interface {
+	pb.BucketServiceServer
 
-	if err := shared.WithErrors(
-		shared.PrefixResourceError("backend", s.Backend.Validate()),
-	); err != nil {
-		return err
-	}
-
-	if err := shared.WithErrors(shared.PrefixResourceErrors("spec",
-		shared.PrefixResourceError("mode", s.Mode.Validate()),
-	)); err != nil {
-		return err
-	}
-
-	return nil
+	Shutdown(cancelFunc context.CancelFunc)
 }

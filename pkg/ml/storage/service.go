@@ -18,33 +18,25 @@
 // Copyright holder is ArangoDB GmbH, Cologne, Germany
 //
 
-package v1alpha1
+package storage
 
 import (
-	"github.com/arangodb/kube-arangodb/pkg/apis/shared"
+	"context"
+
+	"github.com/arangodb/kube-arangodb/pkg/ml/storage/s3"
 )
 
-type ArangoMLStorageSpec struct {
-	Mode    *ArangoMLStorageSpecMode    `json:"mode,omitempty"`
-	Backend *ArangoMLStorageSpecBackend `json:"backend,omitempty"`
+type StorageType string
+
+const (
+	StorageTypeS3Proxy = StorageType("s3")
+)
+
+type ServiceConfig struct {
+	ListenAddress string
+	S3            s3.Config
 }
 
-func (s *ArangoMLStorageSpec) Validate() error {
-	if s == nil {
-		s = &ArangoMLStorageSpec{}
-	}
-
-	if err := shared.WithErrors(
-		shared.PrefixResourceError("backend", s.Backend.Validate()),
-	); err != nil {
-		return err
-	}
-
-	if err := shared.WithErrors(shared.PrefixResourceErrors("spec",
-		shared.PrefixResourceError("mode", s.Mode.Validate()),
-	)); err != nil {
-		return err
-	}
-
-	return nil
+type Service interface {
+	Run(ctx context.Context) error
 }
